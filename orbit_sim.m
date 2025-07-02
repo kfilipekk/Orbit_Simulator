@@ -1,31 +1,25 @@
 classdef orbit_sim < handle
     properties (Access = private)
         %% GUI Handles
-        UIFigure, GridLayout, ControlPanel, PlotTabGroup
-        Ax3D
-        
+        UIFigure, Ax3D
+
         h = struct()
         SimTimer, IsRunning = false
-        Constants = struct('GM', 3.986004418e14, 'R_earth', 6378137.0);
-        History, TimeState
+        Constants, TimeState, Satellite, History
     end
 
     methods (Access = public)
         function app = orbit_sim()
-            app.UIFigure = uifigure('Name', 'Orbit Simulator (UKF)', 'Position', [50 50 1700 950]);
-            app.GridLayout = uigridlayout(app.UIFigure, [1, 2], 'ColumnWidth', {280, '1x'});
-            app.ControlPanel = uipanel(app.GridLayout, 'Title', 'Controls & Settings');
-            app.PlotTabGroup = uitabgroup(app.GridLayout);
-            
-            orbitTab = uitab(app.PlotTabGroup, 'Title', 'Orbit Visualizations');
-            app.Ax3D = uiaxes(orbitTab);
+            app.UIFigure = uifigure('Name', 'Orbit Simulator (UKF)', 'Position', [50 50, 1200, 800]);
+            %% Controls %%
+            cp = uipanel(app.UIFigure, 'Title', 'Controls', 'Position', [10, 690, 140, 100]);
+            uibutton(cp, 'push', 'Text', 'Reset', 'Position', [20 40 100 22], 'ButtonPushedFcn', @app.onReset);
+            uibutton(cp, 'push', 'Text', 'Run/Pause', 'Position', [20 10 100 22], 'ButtonPushedFcn', @app.onRunPause);
+            %% Axes %%
+            app.Ax3D = uiaxes(app.UIFigure, 'Position', [160, 50, 1000, 700]);
             title(app.Ax3D, '3D Orbit Trajectory (ECI)');
-            
-            uibutton(app.ControlPanel, 'push', 'Text', 'Reset', 'Position', [20 880 100 22], 'ButtonPushedFcn', @app.onReset);
-            uibutton(app.ControlPanel, 'push', 'Text', 'Run/Pause', 'Position', [20 850 100 22], 'ButtonPushedFcn', @app.onRunPause);
 
-            app.SimTimer = timer('ExecutionMode', 'fixedRate', 'Period', 0.1, 'TimerFcn', @(~,~) app.updateAnimation);
-            
+            app.SimTimer = timer('ExecutionMode', 'fixedRate', 'Period', 0.1, 'TimerFcn', @(~,~) app.simulationStep);
             app.onReset();
         end
     end
@@ -36,9 +30,10 @@ classdef orbit_sim < handle
                 stop(app.SimTimer);
                 app.IsRunning = false;
             end
-            app.initializeAndDrawOrbit();
+            app.initializeSimulationState();
+            app.initializePlots();
         end
-        
+
         function onRunPause(app, ~, ~)
             app.IsRunning = ~app.IsRunning;
             if app.IsRunning
@@ -48,42 +43,64 @@ classdef orbit_sim < handle
             end
         end
 
-        function initializeAndDrawOrbit(app)
+        function initializeSimulationState(app)
+            %% Constants
+            app.Constants.GM = 3.986004418e14;
+            app.Constants.R_earth = 6378137.0;
+
+            app.TimeState.t = 0;
+            app.TimeState.dt_major = 60;
+            app.TimeState.t_end = 24 * 3600;
+            app.TimeState.k = 1;
+            %% Satellite Initial State
+            a = app.Constants.R_earth + 420e3; e = 0.0003; i = deg2rad(51.6);
+            [r0, v0] = orbit_sim.orb_elements_to_state(a, e, i, 0, 0, 0, app.Constants.GM);
+            app.Satellite.true_state = [r0; v0];
+            %% History
+            num_steps = ceil(app.TimeState.t_end / app.TimeState.dt_major) + 1;
+            app.History.x_true = nan(6, num_steps);
+            app.History.x_true(:, 1) = app.Satellite.true_state;
+        end
+
+        function initializePlots(app)
             cla(app.Ax3D);
-            
-            %% 1. Draw the Earth
+            hold(app.Ax3D, 'on'); grid(app.Ax3D, 'on'); axis(app.Ax3D, 'equal'); view(app.Ax3D, 3);
+            %% Draw Earth
             [xE,yE,zE] = sphere(50);
             surf(app.Ax3D, xE*app.Constants.R_earth/1000, yE*app.Constants.R_earth/1000, zE*app.Constants.R_earth/1000, ...
                  'FaceColor', 'blue', 'EdgeColor', 'none', 'FaceAlpha', 0.7);
-            hold(app.Ax3D, 'on'); grid(app.Ax3D, 'on'); axis(app.Ax3D, 'equal'); view(app.Ax3D, 3);
-
-            %% 2. Define and calculate a simple LEO orbit
-            a = app.Constants.R_earth + 420e3; e = 0.0003; i = deg2rad(51.6);
-            [r0, v0] = orbit_sim.orb_elements_to_state(a, e, i, 0, 0, 0, app.Constants.GM);
-            
-            tspan = 0:10:95*60;
-            ode_opts = odeset('RelTol', 1e-8, 'AbsTol', 1e-9);
-            dynamics = @(t, y) [y(4:6); -app.Constants.GM * y(1:3) / (norm(y(1:3))^3)];
-            [~, y_hist] = ode45(dynamics, tspan, [r0; v0], ode_opts);
-            
-            %% 3. Plot the trajectory
-            plot3(app.Ax3D, y_hist(:,1)/1000, y_hist(:,2)/1000, y_hist(:,3)/1000, 'b-', 'LineWidth', 2);
-            app.h.satellite = plot3(app.Ax3D, NaN, NaN, NaN, 'yo', 'MarkerFaceColor', 'y', 'MarkerSize', 10);
+            %% Create empty plot handles for dynamic data
+            app.h.true_orbit = plot3(app.Ax3D, app.Satellite.true_state(1)/1000, app.Satellite.true_state(2)/1000, app.Satellite.true_state(3)/1000, 'b-', 'LineWidth', 2);
+            app.h.satellite = plot3(app.Ax3D, app.Satellite.true_state(1)/1000, app.Satellite.true_state(2)/1000, app.Satellite.true_state(3)/1000, 'yo', 'MarkerFaceColor', 'y', 'MarkerSize', 10);
             xlabel(app.Ax3D, 'X (km)'); ylabel(app.Ax3D, 'Y (km)'); zlabel(app.Ax3D, 'Z (km)');
-            
-            app.History.y = y_hist'; 
-            app.TimeState.k = 1;
-            pos = app.History.y(1:3, 1);
-            set(app.h.satellite, 'XData', pos(1)/1000, 'YData', pos(2)/1000, 'ZData', pos(3)/1000);
         end
-        
-        function updateAnimation(app)
-            k = app.TimeState.k + 1;
-            if k > size(app.History.y, 2), k = 1; end
-            
-            pos = app.History.y(1:3, k);
-            set(app.h.satellite, 'XData', pos(1)/1000, 'YData', pos(2)/1000, 'ZData', pos(3)/1000);
-            app.TimeState.k = k;
+
+        function simulationStep(app)
+            if app.TimeState.t >= app.TimeState.t_end
+                stop(app.SimTimer);
+                app.IsRunning = false;
+                return;
+            end
+            t_start = app.TimeState.t;
+            t_end = t_start + app.TimeState.dt_major;
+            app.TimeState.t = t_end;
+            app.TimeState.k = app.TimeState.k + 1;
+            %% PROPAGATE
+            dynamics = @(t, y) [y(4:6); -app.Constants.GM * y(1:3) / (norm(y(1:3))^3)];
+            ode_opts = odeset('RelTol', 1e-8, 'AbsTol', 1e-9);
+            [~, y_out] = ode45(dynamics, [t_start, t_end], app.Satellite.true_state, ode_opts);
+            app.Satellite.true_state = y_out(end, :)';
+            app.History.x_true(:, app.TimeState.k) = app.Satellite.true_state;
+            app.updatePlots();
+        end
+
+        function updatePlots(app)
+            k = app.TimeState.k;
+            idx = 1:k;
+            %% Update the full trajectory line
+            set(app.h.true_orbit, 'XData', app.History.x_true(1,idx)/1000, 'YData', app.History.x_true(2,idx)/1000, 'ZData', app.History.x_true(3,idx)/1000);
+            %% Update the current satellite marker
+            set(app.h.satellite, 'XData', app.Satellite.true_state(1)/1000, 'YData', app.Satellite.true_state(2)/1000, 'ZData', app.Satellite.true_state(3)/1000);
             drawnow;
         end
     end
