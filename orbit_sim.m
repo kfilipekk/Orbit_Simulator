@@ -1,41 +1,74 @@
 classdef orbit_sim < handle
     properties (Access = private)
         %% GUI Handles
-        UIFigure, Ax3D, J2Checkbox
-
+        UIFigure, GridLayout, ControlPanel, PlotTabGroup
+        Ax3D
+        RunPauseButton
         h = struct()
         SimTimer, IsRunning = false
-
         %% State & Models
-        Constants, TimeState, Satellite, History, Perturbations, UKF
+        Constants, TimeState, Satellite, History, Perturbations, UKF, Stations
     end
 
     methods (Access = public)
         function app = orbit_sim()
-            app.UIFigure = uifigure('Name', 'Orbit Simulator (UKF)', 'Position', [50 50, 1200, 800]);
-            %% Controls %%
-            cp = uipanel(app.UIFigure, 'Title', 'Controls', 'Position', [10, 590, 140, 200]);
-            uibutton(cp, 'push', 'Text', 'Reset', 'Position', [20 140 100 22], 'ButtonPushedFcn', @app.onReset);
-            uibutton(cp, 'push', 'Text', 'Run/Pause', 'Position', [20 110 100 22], 'ButtonPushedFcn', @app.onRunPause);
-            pp = uipanel(cp, 'Title', 'Perturbations', 'Position', [10 10 120 80]);
-            app.J2Checkbox = uicheckbox(pp, 'Text', 'J2 Effect', 'Value', 1, 'Position', [10 30 100 22]);
-            %% Axes %%
-            app.Ax3D = uiaxes(app.UIFigure, 'Position', [160, 50, 1000, 700]);
-            title(app.Ax3D, '3D Orbit Trajectory (ECI)');
-            %% Timer %%
-            app.SimTimer = timer('ExecutionMode', 'fixedRate', 'Period', 0.1, 'TimerFcn', @(~,~) app.simulationStep);
-            app.onReset();
+            app.createComponents();
+            app.resetSimulation();
+            app.UIFigure.UserData = app;
+        end
+
+        function delete(app)
+            if ~isempty(app.SimTimer) && isvalid(app.SimTimer)
+                stop(app.SimTimer);
+                delete(app.SimTimer);
+            end
+            if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+                delete(app.UIFigure);
+            end
         end
     end
 
     methods (Access = private)
+        function createComponents(app)
+            app.UIFigure = uifigure('Name', 'Advanced Navigation Simulator (UKF)', ...
+                              'Position', [50 50 1700 950], ...
+                              'CloseRequestFcn', @(src, event) delete(app));
+
+            app.GridLayout = uigridlayout(app.UIFigure, [10, 8], 'RowHeight', {30, '1x', '1x', '1x', '1x', '1x', '1x', '1x', '1x', 30}, 'ColumnWidth', {280, '1x', '1x', '1x', '1x', '1x', '1x', '1x'});
+
+            app.ControlPanel = uipanel(app.GridLayout, 'Title', 'Controls & Settings');
+            app.ControlPanel.Layout.Row = [1 10]; app.ControlPanel.Layout.Column = 1;
+            cpGrid = uigridlayout(app.ControlPanel, [5, 1], 'RowHeight', {'fit', 'fit', 'fit', 'fit', '1x'});
+
+            app.PlotTabGroup = uitabgroup(app.GridLayout);
+            app.PlotTabGroup.Layout.Row = [1 9]; app.PlotTabGroup.Layout.Column = [2 8];
+            orbitTab = uitab(app.PlotTabGroup, 'Title', 'Orbit Visualizations');
+            orbitGrid = uigridlayout(orbitTab, [2, 2]);
+            filterTab = uitab(app.PlotTabGroup, 'Title', 'Filter Performance');
+            filterGrid = uigridlayout(filterTab, [2, 2]);
+            forceTab = uitab(app.PlotTabGroup, 'Title', 'Force Analysis');
+
+            app.Ax3D = uiaxes(orbitGrid); app.Ax3D.Layout.Row = [1 2]; title(app.Ax3D, '3D Orbit Trajectory (ECI)');
+            app.AxGroundTrack = uiaxes(orbitGrid); title(app.AxGroundTrack, 'Ground Track');
+            app.AxSkyPlot = uiaxes(orbitGrid); title(app.AxSkyPlot, 'Sky Plot');
+            app.AxErrors = uiaxes(filterGrid); title(app.AxErrors, 'UKF Position Error');
+            app.AxCd = uiaxes(filterGrid); title(app.AxCd, 'Drag Coefficient (Cd) Estimation');
+            app.AxForceAnalysis = uiaxes(forceTab); title(app.AxForceAnalysis, 'Acceleration Magnitudes');
+
+        end
+
+        function resetSimulation(app)
+            %% Placeholder
+            fprintf('Simulation Reset!\n');
+        end
+
+        function onRunPause(app, ~, ~)
+            %% Placeholder
+            fprintf('Run/Pause Toggled!\n');
+        end
+
         function onReset(app, ~, ~)
-            if ~isempty(app.SimTimer) && app.IsRunning
-                stop(app.SimTimer);
-                app.IsRunning = false;
-            end
-            app.initializeSimulationState();
-            app.initializePlots();
+            app.resetSimulation();
         end
 
         function onRunPause(app, ~, ~)
