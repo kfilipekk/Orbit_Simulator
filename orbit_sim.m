@@ -232,7 +232,7 @@ classdef orbit_sim < handle
             app.IsRunning = false;
             app.initializeSimulationState();
             app.initializePlots();
-            app.updatePlots(true);
+            app.updatePlots(true, 0);
             app.RunPauseButton.Text = 'Run'; app.StatusLabel.Text = 'Status: Ready';
             app.ExportButton.Enable = 'off';
             period = 1 / app.SpeedSlider.Value;
@@ -274,10 +274,12 @@ classdef orbit_sim < handle
             [x_pred, P_pred] = app.ukf_predict(app.UKF.x_est, app.UKF.P, dynamics_handle, [t_start, t_end], app.UKF.Q, ode_opts);
             
             station_in_view_idx = 0;
+            station_in_view_name = 'None';
             for i = 1:length(app.Stations)
-                [~, el, ~] = orbit_sim.ecef2aer(app.UKF.x_true(1:3), t_end, app.Stations(i), app.Constants);
+                [az, el, rho] = orbit_sim.ecef2aer(app.UKF.x_true(1:3), t_end, app.Stations(i), app.Constants);
                 if el > app.Satellite.min_elevation
                     station_in_view_idx = i;
+                    station_in_view_name = app.Stations(i).name;
                     z_true = orbit_sim.measurement_model(app.UKF.x_true(1:3), t_end, app.Stations(i), app.Constants);
                     z_meas = z_true + sqrt(diag(app.UKF.R)) .* randn(3, 1);
                     [app.UKF.x_est, app.UKF.P] = app.ukf_update(x_pred, P_pred, z_meas, app.Stations(i), t_end, app.UKF.R);
@@ -292,8 +294,9 @@ classdef orbit_sim < handle
             [~, forces] = dynamics_handle(t_end, app.UKF.x_true);
             app.History.force_mags(:, app.TimeState.k) = forces;
 
-            app.updatePlots(false);
+            app.updatePlots(false, station_in_view_idx);
             app.StatusLabel.Text = 'Status: Running...';
+            app.StationLabel.Text = ['Tracking: ' station_in_view_name];
         end
         
         function [x_pred, P_pred] = ukf_predict(app, x_est, P_est, dynamics, tspan, Q, ode_opts)
@@ -344,7 +347,11 @@ classdef orbit_sim < handle
         end
 
         %% Plotting and Updates
-        function updatePlots(app, is_reset)
+        function updatePlots(app, is_reset, tracking_station_idx)
+            if nargin < 3
+                tracking_station_idx = 0;
+            end
+
             k = app.TimeState.k; if k < 2 && ~is_reset, return; end
             idx = 1:k;
             time_hrs = app.TimeState.time_vector(idx)/3600;
@@ -353,6 +360,21 @@ classdef orbit_sim < handle
             set(app.h.est_orbit, 'XData', app.History.x_est(1,idx)/1000, 'YData', app.History.x_est(2,idx)/1000, 'ZData', app.History.x_est(3,idx)/1000);
             set(app.h.satellite, 'XData', app.UKF.x_true(1)/1000, 'YData', app.UKF.x_true(2)/1000, 'ZData', app.UKF.x_true(3)/1000);
             
+            if is_reset
+                for i=1:length(app.Stations)
+                    r_eci = orbit_sim.ecef2eci_matrix(app.Constants.omega_earth * app.TimeState.t) * app.Stations(i).r_ecef;
+                    set(app.h.stations(i), 'XData', r_eci(1)/1000, 'YData', r_eci(2)/1000, 'ZData', r_eci(3)/1000);
+                end
+            end
+
+            for i=1:length(app.Stations)
+                if i == tracking_station_idx
+                    set(app.h.stations(i), 'MarkerFaceColor', 'r');
+                else
+                    set(app.h.stations(i), 'MarkerFaceColor', 'g');
+                end
+            end
+
             [lats, lons] = orbit_sim.eci2lla_vectorized(app.History.x_true(1:3,idx), app.TimeState.time_vector(idx), app.Constants);
             set(app.h.ground_track, 'XData', rad2deg(unwrap(lons)), 'YData', rad2deg(lats));
             
@@ -507,10 +529,10 @@ classdef orbit_sim < handle
         function [az, el, rho] = ecef2aer(r_sat_eci, t, station, C)
             r_sat_ecef = orbit_sim.ecef2eci_matrix(C.omega_earth * t)' * r_sat_eci;
             rho_vec_ecef = r_sat_ecef - station.r_ecef;
-            R_ecef2enu = [-sin(station.lon), -sin(station.lat)*cos(station.lon), cos(station.lat)*cos(station.lon);
-                           cos(station.lon), -sin(station.lat)*sin(station.lon), cos(station.lat)*sin(station.lon);
-                           0,                 cos(station.lat),                   sin(station.lat)];
-            rho_vec_enu = R_ecef2enu' * rho_vec_ecef;
+            R_ecef2enu = [-sin(station.lon), cos(station.lon), 0;
+                          -sin(station.lat)*cos(station.lon), -sin(station.lat)*sin(station.lon), cos(station.lat);
+                           cos(station.lat)*cos(station.lon), cos(station.lat)*sin(station.lon), sin(station.lat)];
+            rho_vec_enu = R_ecef2enu * rho_vec_ecef;
             rho = norm(rho_vec_enu);
             el = asin(rho_vec_enu(3) / rho);
             az = atan2(rho_vec_enu(1), rho_vec_enu(2));
